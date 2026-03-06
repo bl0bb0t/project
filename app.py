@@ -17,7 +17,7 @@ from tensorflow.keras.layers import LSTM, Dense, Dropout
 import warnings
 warnings.filterwarnings('ignore')
 
-# ---------- PAGE CONFIG ----------
+# PAGE CONFIG 
 st.set_page_config(
     page_title="CoinCast",
     page_icon="🪙",
@@ -25,7 +25,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# ---------- SESSION STATE INIT ----------
+# SESSION STATE INIT 
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
 if 'username' not in st.session_state:
@@ -43,7 +43,7 @@ if 'price_cache' not in st.session_state:
 if 'forex_rates' not in st.session_state:
     st.session_state.forex_rates = {'GBP': 1, 'USD': 1.27, 'EUR': 1.17}  # fallback
 
-# ---------- DATABASE SETUP ----------
+#  DATABASE SETUP 
 def init_db():
     conn = sqlite3.connect('coincast.db')
     c = conn.cursor()
@@ -73,7 +73,7 @@ def init_db():
 
 init_db()
 
-# ---------- HELPER FUNCTIONS ----------
+# HELPER FUNCTIONS 
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
@@ -139,7 +139,7 @@ def trigger_alert(alert_id):
     conn.commit()
     conn.close()
 
-# ---------- API CLIENTS ----------
+# API CLIENTS 
 @st.cache_data(ttl=60)
 def get_top_coins(currency='gbp', per_page=90):
     url = "https://api.coingecko.com/api/v3/coins/markets"
@@ -226,7 +226,7 @@ def get_news_sentiment(coin_name):
     sentiments = ['Bullish', 'Bearish', 'Neutral']
     return random.choice(sentiments)
 
-# ---------- BACKGROUND PRICE UPDATER & ALERT CHECKER ----------
+#  BACKGROUND PRICE UPDATER & ALERT CHECKER 
 def update_prices_and_check_alerts():
     while True:
         time.sleep(60)  # update every minute
@@ -255,7 +255,7 @@ if 'background_thread' not in st.session_state:
     thread.start()
     st.session_state.background_thread = True
 
-# ---------- TECHNICAL INDICATORS ----------
+# TECHNICAL INDICATORS 
 def calculate_rsi(series, period=14):
     delta = series.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
@@ -288,7 +288,7 @@ def preprocess_data(df):
     df = df[(z_scores < 3)]
     return df
 
-# ---------- MACHINE LEARNING PREDICTION ----------
+# MACHINE LEARNING PREDICTION 
 def predict_with_lstm(df, days_to_predict=1):
     # Prepare data
     prices = df['price'].values.reshape(-1, 1)
@@ -345,7 +345,7 @@ def predict_with_linear(df):
     pred = model.predict([[len(df)]])[0]
     return pred, df['price'].iloc[-1]
 
-# ---------- UI CUSTOMIZATION ----------
+#  UI CUSTOMIZATION 
 def set_theme(theme):
     if theme == 'dark':
         st.markdown("""
@@ -364,10 +364,10 @@ def set_theme(theme):
         </style>
         """, unsafe_allow_html=True)
 
-# ---------- SIDEBAR (AUTH & SETTINGS) ----------
+#  SIDEBAR (AUTH & SETTINGS) 
 with st.sidebar:
     st.image("https://via.placeholder.com/150x50?text=CoinCast+Pro", use_column_width=True)
-    st.title("🔐 Account")
+    st.title(" Account")
 
     if not st.session_state.logged_in:
         tab1, tab2 = st.tabs(["Login", "Sign Up"])
@@ -398,7 +398,7 @@ with st.sidebar:
             st.rerun()
 
     st.markdown("---")
-    st.header("⚙️ Settings")
+    st.header(" Settings")
     currency = st.selectbox("Currency", ["GBP", "USD", "EUR"], index=0)
     if currency != st.session_state.currency:
         st.session_state.currency = currency
@@ -417,12 +417,12 @@ with st.sidebar:
 # Apply theme
 set_theme(st.session_state.theme)
 
-# ---------- MAIN CONTENT (Multi‑page via radio) ----------
+# MAIN CONTENT (Multi‑page via radio) 
 page = st.sidebar.radio("Navigation", ["Leaderboard", "Portfolio", "Alerts", "Search", "Settings"])
 
-# ---------- LEADERBOARD PAGE ----------
+# LEADERBOARD PAGE 
 if page == "Leaderboard":
-    st.title("🏆 Market Leaderboard")
+    st.title("Market Leaderboard")
     st.markdown("Top 90 cryptocurrencies by market cap")
 
     currency_lower = st.session_state.currency.lower()
@@ -461,7 +461,7 @@ if page == "Leaderboard":
 
         # Quick stats
         st.markdown("---")
-        st.subheader("📊 Market Summary")
+        st.subheader(" Market Summary")
         total_mcap = sum([c['market_cap'] for c in coins if c['market_cap']])
         avg_price = np.mean([c['current_price'] for c in coins])
         st.metric("Total Market Cap", f"{total_mcap:,.0f} {st.session_state.currency}")
@@ -470,17 +470,17 @@ if page == "Leaderboard":
     else:
         st.error("Failed to load leaderboard. Check your internet connection.")
 
-# ---------- COIN DETAIL PAGE (shown after selecting a coin) ----------
+#  COIN DETAIL PAGE (shown after selecting a coin) 
 # This will appear as an overlay or separate section when a coin is selected
 if st.session_state.selected_coin:
     st.markdown("---")
-    st.header(f"📈 {st.session_state.selected_coin.capitalize()} Details")
+    st.header(f" {st.session_state.selected_coin.capitalize()} Details")
     coin_data = get_coin_data(st.session_state.selected_coin, st.session_state.currency.lower())
 
     if coin_data:
         # Main price
         st.subheader(f"{coin_data['name']} ({coin_data['symbol']})")
-        st.markdown(f"### 💰 {coin_data['current_price']:,.2f} {st.session_state.currency}")
+        st.markdown(f"### {coin_data['current_price']:,.2f} {st.session_state.currency}")
 
         # Price changes (mockup: 24h, 72h, 14d, 1y) – we'll map 72h to 3d (not directly available)
         col1, col2, col3, col4 = st.columns(4)
