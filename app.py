@@ -17,15 +17,14 @@ from tensorflow.keras.layers import LSTM, Dense, Dropout
 import warnings
 warnings.filterwarnings('ignore')
 
-# PAGE CONFIG 
+#page layout
 st.set_page_config(
-    page_title="CoinCast",
-    page_icon="🪙",
+    page_title="CryptoCast",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# SESSION STATE INIT 
+#session state
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
 if 'username' not in st.session_state:
@@ -41,16 +40,16 @@ if 'last_update' not in st.session_state:
 if 'price_cache' not in st.session_state:
     st.session_state.price_cache = {}
 if 'forex_rates' not in st.session_state:
-    st.session_state.forex_rates = {'GBP': 1, 'USD': 1.27, 'EUR': 1.17}  # fallback
+    st.session_state.forex_rates = {'GBP': 1, 'USD': 1.27, 'EUR': 1.17}
+if 'current_page' not in st.session_state:
+    st.session_state.current_page = "CryptoCast"  # default
 
-#  DATABASE SETUP 
+#database
 def init_db():
     conn = sqlite3.connect('coincast.db')
     c = conn.cursor()
-    # Users table
     c.execute('''CREATE TABLE IF NOT EXISTS users
                  (username TEXT PRIMARY KEY, password TEXT)''')
-    # Portfolio table
     c.execute('''CREATE TABLE IF NOT EXISTS portfolio
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   username TEXT,
@@ -59,7 +58,6 @@ def init_db():
                   entry_price REAL,
                   currency TEXT,
                   FOREIGN KEY(username) REFERENCES users(username))''')
-    # Alerts table
     c.execute('''CREATE TABLE IF NOT EXISTS alerts
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   username TEXT,
@@ -73,7 +71,7 @@ def init_db():
 
 init_db()
 
-# HELPER FUNCTIONS 
+#hash passwords for security
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
@@ -89,6 +87,7 @@ def register_user(username, password):
     finally:
         conn.close()
 
+#login function
 def login_user(username, password):
     conn = sqlite3.connect('coincast.db')
     c = conn.cursor()
@@ -139,7 +138,7 @@ def trigger_alert(alert_id):
     conn.commit()
     conn.close()
 
-# API CLIENTS 
+#API calls- coingecko
 @st.cache_data(ttl=60)
 def get_top_coins(currency='gbp', per_page=90):
     url = "https://api.coingecko.com/api/v3/coins/markets"
@@ -184,7 +183,7 @@ def get_coin_data(coin_id, currency='gbp'):
             'price_change_7d': market.get('price_change_percentage_7d', 0),
             'price_change_30d': market.get('price_change_percentage_30d', 0),
             'price_change_1y': market.get('price_change_percentage_1y', 0),
-            'total_holders': community.get('twitter_followers', 0)  # mock "Total Users"
+            'total_holders': community.get('twitter_followers', 0)
         }
     except:
         return None
@@ -200,18 +199,17 @@ def get_historical_data(coin_id, days=30, currency='gbp'):
     try:
         r = requests.get(url, params=params, timeout=10)
         data = r.json()
-        prices = data['prices']  # [timestamp, price]
+        prices = data['prices']
         df = pd.DataFrame(prices, columns=['timestamp', 'price'])
         df['date'] = pd.to_datetime(df['timestamp'], unit='ms')
         return df[['date', 'price']]
     except:
-        # fallback synthetic data
         dates = pd.date_range(end=datetime.now(), periods=days)
         prices = np.random.normal(50000, 5000, days).cumsum()
         return pd.DataFrame({'date': dates, 'price': prices})
 
+#forex rates (for currency conversion)
 def get_forex_rates(base='GBP'):
-    # Free API from exchangerate-api.com
     url = f"https://api.exchangerate-api.com/v4/latest/{base}"
     try:
         r = requests.get(url, timeout=5)
@@ -220,17 +218,14 @@ def get_forex_rates(base='GBP'):
         return st.session_state.forex_rates
 
 def get_news_sentiment(coin_name):
-    # Mock sentiment based on random or simple rule
-    # In production, use NewsAPI and NLP
     import random
     sentiments = ['Bullish', 'Bearish', 'Neutral']
     return random.choice(sentiments)
 
-#  BACKGROUND PRICE UPDATER & ALERT CHECKER 
+#price update and alert 
 def update_prices_and_check_alerts():
     while True:
-        time.sleep(60)  # update every minute
-        # Get all active alerts
+        time.sleep(60)
         conn = sqlite3.connect('coincast.db')
         c = conn.cursor()
         c.execute("SELECT id, username, coin_id, target_price, currency FROM alerts WHERE triggered=0")
@@ -239,23 +234,16 @@ def update_prices_and_check_alerts():
 
         for alert in alerts:
             alert_id, username, coin_id, target, cur = alert
-            # fetch current price
             data = get_coin_data(coin_id, cur.lower())
             if data and data['current_price'] >= target:
-                # Trigger alert (store in session to show in UI)
-                # For simplicity, we'll just mark triggered in DB and set a flag
                 trigger_alert(alert_id)
-                # We'll show notification via Streamlit's session state
-                # but Streamlit is not thread-safe, so we use a queue or just mark DB
-                # The UI will check for triggered alerts on each rerun
 
-# Start background thread (only once)
 if 'background_thread' not in st.session_state:
     thread = threading.Thread(target=update_prices_and_check_alerts, daemon=True)
     thread.start()
     st.session_state.background_thread = True
 
-# TECHNICAL INDICATORS 
+# technical indicators for graphs
 def calculate_rsi(series, period=14):
     delta = series.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
@@ -280,22 +268,18 @@ def calculate_bollinger(series, window=20, num_std=2):
     return upper, rolling_mean, lower
 
 def preprocess_data(df):
-    # Remove missing, duplicates, outliers
     df = df.dropna().drop_duplicates(subset=['date'])
-    # Simple outlier removal (z-score > 3)
     from scipy import stats
     z_scores = np.abs(stats.zscore(df['price']))
     df = df[(z_scores < 3)]
     return df
 
-# MACHINE LEARNING PREDICTION 
+#using machine learning for price prediction
 def predict_with_lstm(df, days_to_predict=1):
-    # Prepare data
     prices = df['price'].values.reshape(-1, 1)
     scaler = MinMaxScaler(feature_range=(0, 1))
     scaled_prices = scaler.fit_transform(prices)
 
-    # Create sequences
     def create_sequences(data, seq_length=60):
         X, y = [], []
         for i in range(seq_length, len(data)):
@@ -311,10 +295,8 @@ def predict_with_lstm(df, days_to_predict=1):
     if len(X) == 0:
         return None, "Insufficient sequences"
 
-    # Reshape for LSTM (samples, timesteps, features)
     X = X.reshape(X.shape[0], X.shape[1], 1)
 
-    # Build LSTM model
     model = Sequential()
     model.add(LSTM(50, return_sequences=True, input_shape=(seq_length, 1)))
     model.add(Dropout(0.2))
@@ -323,10 +305,8 @@ def predict_with_lstm(df, days_to_predict=1):
     model.add(Dense(1))
     model.compile(optimizer='adam', loss='mse')
 
-    # Train (quick, for demo)
     model.fit(X, y, epochs=5, batch_size=32, verbose=0)
 
-    # Predict next day
     last_sequence = scaled_prices[-seq_length:].reshape(1, seq_length, 1)
     pred_scaled = model.predict(last_sequence, verbose=0)[0,0]
     pred_price = scaler.inverse_transform([[pred_scaled]])[0,0]
@@ -345,7 +325,7 @@ def predict_with_linear(df):
     pred = model.predict([[len(df)]])[0]
     return pred, df['price'].iloc[-1]
 
-#  UI CUSTOMIZATION 
+#UI customisation 
 def set_theme(theme):
     if theme == 'dark':
         st.markdown("""
@@ -364,10 +344,10 @@ def set_theme(theme):
         </style>
         """, unsafe_allow_html=True)
 
-#  SIDEBAR (AUTH & SETTINGS) 
+#sidebar (authentication, settings)
 with st.sidebar:
-    st.image("https://via.placeholder.com/150x50?text=CoinCast+Pro", use_column_width=True)
-    st.title(" Account")
+    st.image("https://via.placeholder.com/150x50?text=CryptoCast", use_column_width=True)
+    st.title("Account")
 
     if not st.session_state.logged_in:
         tab1, tab2 = st.tabs(["Login", "Sign Up"])
@@ -398,7 +378,7 @@ with st.sidebar:
             st.rerun()
 
     st.markdown("---")
-    st.header(" Settings")
+    st.header("Settings")
     currency = st.selectbox("Currency", ["GBP", "USD", "EUR"], index=0)
     if currency != st.session_state.currency:
         st.session_state.currency = currency
@@ -414,118 +394,160 @@ with st.sidebar:
     st.markdown("---")
     st.caption(f"Last updated: {st.session_state.last_update.strftime('%H:%M:%S')}")
 
-# Apply theme
+#searchbar
+    st.markdown("### Quick Search")
+    search_term = st.text_input("Search coin...")
+    if search_term:
+        search_term = search_term.lower().strip()
+        url = f"https://api.coingecko.com/api/v3/search?query={search_term}"
+        try:
+            r = requests.get(url)
+            data = r.json()
+            coins = data.get('coins', [])
+            if coins:
+                for coin in coins[:5]:
+                    if st.button(f"{coin['name']} ({coin['symbol']})", key=f"sidebar_search_{coin['id']}"):
+                        st.session_state.selected_coin = coin['id']
+                        st.session_state.current_page = "Dashboard"  # go to dashboard to see details
+                        st.rerun()
+            else:
+                st.write("No matches")
+        except:
+            st.write("Search failed")
+
+#apply theme
 set_theme(st.session_state.theme)
 
-# MAIN CONTENT (Multi‑page via radio) 
-page = st.sidebar.radio("Navigation", ["Leaderboard", "Portfolio", "Alerts", "Search", "Settings"])
+#navigation bar
+st.markdown("""
+<style>
+    div.row-widget.stButton > button {
+        background-color: transparent;
+        border: none;
+        color: #4B0082;
+        font-size: 18px;
+        font-weight: bold;
+        padding: 10px 20px;
+        border-radius: 0;
+        margin: 0;
+    }
+    div.row-widget.stButton > button:hover {
+        background-color: rgba(75, 0, 130, 0.1);
+    }
+    div.row-widget.stButton > button:focus {
+        box-shadow: none;
+        border-bottom: 3px solid #4B0082;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-# LEADERBOARD PAGE 
-if page == "Leaderboard":
+nav_cols = st.columns(4)
+with nav_cols[0]:
+    if st.button("CryptoCast", use_container_width=True):
+        st.session_state.current_page = "CryptoCast"
+        st.rerun()
+with nav_cols[1]:
+    if st.button("Dashboard", use_container_width=True):
+        st.session_state.current_page = "Dashboard"
+        st.rerun()
+with nav_cols[2]:
+    if st.button("Portfolio", use_container_width=True):
+        st.session_state.current_page = "Portfolio"
+        st.rerun()
+with nav_cols[3]:
+    if st.button("Alerts", use_container_width=True):
+        st.session_state.current_page = "Alerts"
+        st.rerun()
+
+st.markdown("---")
+
+page = st.session_state.current_page
+
+#leaderboard
+if page == "CryptoCast":
     st.title("Market Leaderboard")
-    st.markdown("Top 90 cryptocurrencies by market cap")
+    st.markdown("Top 100 cryptocurrencies by market cap")
 
     currency_lower = st.session_state.currency.lower()
-    coins = get_top_coins(currency_lower, 90)
+    coins = get_top_coins(currency_lower, 100)
 
     if coins:
-        # Create DataFrame
         df = pd.DataFrame(coins)
         df['name'] = df['name'].astype(str)
         df['symbol'] = df['symbol'].astype(str).str.upper()
         df['current_price'] = df['current_price'].round(2)
         df['market_cap'] = df['market_cap'].apply(lambda x: f"{x:,.0f}")
         df['price_change_24h'] = df['price_change_percentage_24h'].round(2)
-        df['price_change_7d'] = df['price_change_percentage_7d_in_currency'].round(2)
-        df['price_change_30d'] = df['price_change_percentage_30d_in_currency'].round(2)
-        df['price_change_1y'] = df['price_change_percentage_1y_in_currency'].round(2)
 
-        # Show as interactive table with selection
-        display_df = df[['name', 'symbol', 'current_price', 'market_cap', 'price_change_24h']]
-        display_df.columns = ['Name', 'Symbol', f'Price ({st.session_state.currency})', 'Market Cap', '24h %']
-
-        # Add select buttons
         for i, row in df.iterrows():
-            col1, col2, col3, col4, col5, col6 = st.columns([2,1,1,1,1,1])
+            col1, col2, col3, col4, col5 = st.columns([2,1,1,1,1])
             col1.write(f"{row['name']} ({row['symbol']})")
             col2.write(f"{row['current_price']:,.2f}")
             col3.write(f"{row['market_cap']}")
             col4.write(f"{row['price_change_24h']:+.2f}%")
-            if col5.button("Select", key=f"select_{row['id']}"):
+            if col5.button("View", key=f"view_{row['id']}"):
                 st.session_state.selected_coin = row['id']
-                st.rerun()
-            if col6.button("Alert", key=f"alert_{row['id']}"):
-                st.session_state['alert_coin'] = row['id']
-                st.session_state['alert_name'] = row['name']
+                st.session_state.current_page = "Dashboard"
                 st.rerun()
 
-        # Quick stats
         st.markdown("---")
-        st.subheader(" Market Summary")
+        st.subheader("Market Summary")
         total_mcap = sum([c['market_cap'] for c in coins if c['market_cap']])
         avg_price = np.mean([c['current_price'] for c in coins])
         st.metric("Total Market Cap", f"{total_mcap:,.0f} {st.session_state.currency}")
         st.metric("Average Price", f"{avg_price:,.2f} {st.session_state.currency}")
-
     else:
         st.error("Failed to load leaderboard. Check your internet connection.")
 
-#  COIN DETAIL PAGE (shown after selecting a coin) 
-# This will appear as an overlay or separate section when a coin is selected
-if st.session_state.selected_coin:
-    st.markdown("---")
-    st.header(f" {st.session_state.selected_coin.capitalize()} Details")
+#dashboard
+elif page == "Dashboard":
+    st.title(f"Dashboard: {st.session_state.selected_coin.capitalize()}")
     coin_data = get_coin_data(st.session_state.selected_coin, st.session_state.currency.lower())
 
     if coin_data:
-        # Main price
         st.subheader(f"{coin_data['name']} ({coin_data['symbol']})")
         st.markdown(f"### {coin_data['current_price']:,.2f} {st.session_state.currency}")
 
-        # Price changes (mockup: 24h, 72h, 14d, 1y) – we'll map 72h to 3d (not directly available)
+        #price changes overtime
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("24h", f"{coin_data['price_change_24h']:+.2f}%")
-        col2.metric("72h", f"{coin_data.get('price_change_7d', 0)/7*3:+.2f}%")  # approx
+        col2.metric("72h", f"{coin_data.get('price_change_7d', 0)/7*3:+.2f}%")
         col3.metric("14d", f"{coin_data.get('price_change_30d', 0)/30*14:+.2f}%")
         col4.metric("1y", f"{coin_data['price_change_1y']:+.2f}%")
 
-        # Market Stats (matching mockup)
-        st.markdown("#### 📊 Market Stats (GBP)")
+        #market Stats
+        st.markdown("#### Market Stats")
         mc1, mc2, mc3, mc4, mc5, mc6 = st.columns(6)
         mc1.metric("Currency Price", f"{coin_data['current_price']:,.2f}")
-        mc2.metric("Median Cap", "N/A")  # mock
+        mc2.metric("Median Cap", "N/A")
         mc3.metric("24h Volume", f"{coin_data['total_volume']:,.0f}")
         mc4.metric("24h High", f"{coin_data['high_24h']:,.2f}")
         mc5.metric("24h Low", f"{coin_data['low_24h']:,.2f}")
-        mc6.metric("Closing Today", f"{coin_data['current_price']:,.2f}")  # approximate
+        mc6.metric("Closing Today", f"{coin_data['current_price']:,.2f}")
 
-        # Total Users (mock)
         st.metric("Total Users", f"{coin_data.get('total_holders', 0):,}")
 
-        # Historical chart
-        st.markdown("#### 📈 Price History & Prediction")
+        #historical chart
+        st.markdown("#### Price History & Prediction")
         timeframe = st.selectbox("Timeframe", ["1D", "7D", "1M", "3M", "1Y"], index=2)
         days_map = {"1D":1, "7D":7, "1M":30, "3M":90, "1Y":365}
         hist_df = get_historical_data(st.session_state.selected_coin, days_map[timeframe], st.session_state.currency.lower())
         hist_df = preprocess_data(hist_df)
 
-        # Technical indicators
+        #technical indicators
         hist_df['RSI'] = calculate_rsi(hist_df['price'])
         hist_df['MACD'], hist_df['Signal'], hist_df['Histogram'] = calculate_macd(hist_df['price'])
         hist_df['BB_upper'], hist_df['BB_mid'], hist_df['BB_lower'] = calculate_bollinger(hist_df['price'])
 
-        # Plot with subplots
+        #plot
         fig = make_subplots(rows=3, cols=1, shared_xaxes=True, 
-                            vertical_spacing=0.05, row_heights=[0.5,0.25,0.25])
-        # Price & BB
+         vertical_spacing=0.05, row_heights=[0.5,0.25,0.25])
         fig.add_trace(go.Scatter(x=hist_df['date'], y=hist_df['price'], mode='lines', name='Price'), row=1, col=1)
         fig.add_trace(go.Scatter(x=hist_df['date'], y=hist_df['BB_upper'], mode='lines', line=dict(dash='dash'), name='BB Upper'), row=1, col=1)
         fig.add_trace(go.Scatter(x=hist_df['date'], y=hist_df['BB_lower'], mode='lines', line=dict(dash='dash'), name='BB Lower'), row=1, col=1)
-        # RSI
         fig.add_trace(go.Scatter(x=hist_df['date'], y=hist_df['RSI'], mode='lines', name='RSI'), row=2, col=1)
         fig.add_hline(y=70, line_dash="dot", line_color="red", row=2, col=1)
         fig.add_hline(y=30, line_dash="dot", line_color="green", row=2, col=1)
-        # MACD
         fig.add_trace(go.Scatter(x=hist_df['date'], y=hist_df['MACD'], mode='lines', name='MACD'), row=3, col=1)
         fig.add_trace(go.Scatter(x=hist_df['date'], y=hist_df['Signal'], mode='lines', name='Signal'), row=3, col=1)
         fig.add_trace(go.Bar(x=hist_df['date'], y=hist_df['Histogram'], name='Histogram'), row=3, col=1)
@@ -533,8 +555,8 @@ if st.session_state.selected_coin:
         fig.update_layout(height=600, showlegend=False, title=f"{coin_data['name']} Price & Indicators")
         st.plotly_chart(fig, use_container_width=True)
 
-        # Prediction
-        st.markdown("#### 🔮 Price Prediction")
+        #prediction
+        st.markdown("#### Price Prediction")
         try:
             pred_price, curr_price = predict_with_lstm(hist_df)
             if pred_price is None:
@@ -545,26 +567,26 @@ if st.session_state.selected_coin:
         if pred_price:
             st.write(f"**Predicted next day price:** {pred_price:,.2f} {st.session_state.currency}")
             if pred_price > curr_price:
-                st.success("📈 **Bullish** (predicted > current)")
+                st.success(" **Bullish** (predicted > current)")
             elif pred_price < curr_price:
-                st.error("📉 **Bearish** (predicted < current)")
+                st.error(" **Bearish** (predicted < current)")
             else:
-                st.info("➡️ **Sideways**")
+                st.info(" **Sideways**")
         else:
             st.warning("Not enough data for prediction")
 
-        # Sentiment
-        st.markdown("#### 📰 News Sentiment")
+        #news sentiment
+        st.markdown("#### News Sentiment")
         sentiment = get_news_sentiment(coin_data['name'])
         if sentiment == 'Bullish':
-            st.success(f"Sentiment: {sentiment} 😊")
+            st.success(f"Sentiment: {sentiment}")
         elif sentiment == 'Bearish':
-            st.error(f"Sentiment: {sentiment} 😞")
+            st.error(f"Sentiment: {sentiment}")
         else:
-            st.info(f"Sentiment: {sentiment} 😐")
+            st.info(f"Sentiment: {sentiment}")
 
-        # Products (mock buttons)
-        st.markdown("#### 🛒 Products for " + coin_data['name'])
+        #products
+        st.markdown("#### Products for " + coin_data['name'])
         cols = st.columns(5)
         cols[0].button("Buy", key="buy", disabled=True)
         cols[1].button("Sell", key="sell", disabled=True)
@@ -572,7 +594,7 @@ if st.session_state.selected_coin:
         cols[3].button("Deposit", key="deposit", disabled=True)
         cols[4].button("Withdraw", key="withdraw", disabled=True)
 
-        # Add to Portfolio from this page
+        # Add to Portfolio
         if st.session_state.logged_in:
             st.markdown("#### ➕ Add to Portfolio")
             with st.form("add_portfolio_form"):
@@ -581,23 +603,22 @@ if st.session_state.selected_coin:
                 submitted = st.form_submit_button("Add to Portfolio")
                 if submitted and amount_invested > 0:
                     add_to_portfolio(st.session_state.username, st.session_state.selected_coin,
-                                     amount_invested, entry_price, st.session_state.currency)
+                    amount_invested, entry_price, st.session_state.currency)
                     st.success("Added!")
         else:
             st.info("Login to add to portfolio")
-
     else:
         st.error("Could not load coin data")
 
-# ---------- PORTFOLIO PAGE ----------
-if page == "Portfolio":
-    st.title("📁 My Portfolio")
+#portfolio page
+elif page == "Portfolio":
+    st.title(" My Portfolio")
     if not st.session_state.logged_in:
         st.warning("Please login to view your portfolio")
     else:
         portfolio_df = get_portfolio(st.session_state.username)
         if portfolio_df.empty:
-            st.info("Your portfolio is empty. Add coins from the leaderboard.")
+            st.info("Your portfolio is empty. Add coins from the CryptoCast or Dashboard.")
         else:
             total_invested = 0
             total_current = 0
@@ -606,7 +627,6 @@ if page == "Portfolio":
                 coin_data = get_coin_data(row['coin_id'], st.session_state.currency.lower())
                 if coin_data:
                     current_price = coin_data['current_price']
-                    # Convert entry price if currency differs? Assume same currency for now
                     quantity = row['amount_invested'] / row['entry_price']
                     current_value = quantity * current_price
                     profit = current_value - row['amount_invested']
@@ -632,28 +652,25 @@ if page == "Portfolio":
             st.metric("Total P&L", f"{total_current - total_invested:+,.2f} {st.session_state.currency}",
                       delta=f"{((total_current-total_invested)/total_invested*100):+.2f}%" if total_invested else "")
 
-            # Option to remove
             remove_id = st.selectbox("Remove entry", df_port['id'].tolist(), format_func=lambda x: f"ID {x}")
             if st.button("Remove"):
                 remove_from_portfolio(remove_id)
                 st.rerun()
 
-            # Export
             if st.button("Export to CSV"):
                 csv = df_port.to_csv(index=False)
                 st.download_button("Download CSV", csv, "portfolio.csv", "text/csv")
 
-# ---------- ALERTS PAGE ----------
-if page == "Alerts":
-    st.title("🔔 Price Alerts")
+#alerts page
+elif page == "Alerts":
+    st.title(" Price Alerts")
     if not st.session_state.logged_in:
         st.warning("Login to manage alerts")
     else:
         alerts_df = get_alerts(st.session_state.username)
         if not alerts_df.empty:
             st.dataframe(alerts_df[['coin_id', 'target_price', 'currency']])
-            # Check for triggered alerts (background thread marks them triggered)
-            # Show if any triggered
+            # Check triggered
             conn = sqlite3.connect('coincast.db')
             triggered = pd.read_sql_query("SELECT * FROM alerts WHERE username=? AND triggered=1", conn, params=(st.session_state.username,))
             conn.close()
@@ -661,7 +678,6 @@ if page == "Alerts":
                 st.balloons()
                 for _, row in triggered.iterrows():
                     st.success(f"🚨 {row['coin_id']} reached {row['target_price']} {row['currency']}!")
-                # Option to clear triggered
                 if st.button("Clear triggered alerts"):
                     conn = sqlite3.connect('coincast.db')
                     c = conn.cursor()
@@ -670,46 +686,11 @@ if page == "Alerts":
                     conn.close()
                     st.rerun()
         else:
-            st.info("No active alerts. Set one from the leaderboard.")
+            st.info("No active alerts. Set one from the Dashboard.")
 
-        # Quick add alert
         st.subheader("Set new alert")
         coin_id = st.text_input("Coin ID (e.g., bitcoin)")
         target = st.number_input("Target price", min_value=0.0, step=0.01)
         if st.button("Set Alert") and coin_id and target:
             add_alert(st.session_state.username, coin_id.lower(), target, st.session_state.currency)
             st.success("Alert set!")
-
-# ---------- SEARCH PAGE ----------
-if page == "Search":
-    st.title("🔍 Search Coins")
-    search_term = st.text_input("Enter coin name or symbol")
-    if search_term:
-        search_term = search_term.lower().strip()
-        # Use CoinGecko search
-        url = f"https://api.coingecko.com/api/v3/search?query={search_term}"
-        try:
-            r = requests.get(url)
-            data = r.json()
-            coins = data.get('coins', [])
-            if coins:
-                for coin in coins[:10]:  # show top 10 matches
-                    st.write(f"**{coin['name']}** ({coin['symbol']})")
-                    if st.button("Select", key=f"search_{coin['id']}"):
-                        st.session_state.selected_coin = coin['id']
-                        st.rerun()
-            else:
-                st.error("❌ Coin not found")
-        except:
-            st.error("Search failed")
-
-# ---------- SETTINGS PAGE ----------
-if page == "Settings":
-    st.title("⚙️ Settings")
-    st.write("Configure your preferences")
-    # already in sidebar, but here for completeness
-    st.write(f"Current currency: {st.session_state.currency}")
-    st.write(f"Theme: {st.session_state.theme}")
-    if st.button("Clear cache"):
-        st.cache_data.clear()
-        st.success("Cache cleared")
